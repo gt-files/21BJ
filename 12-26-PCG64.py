@@ -1,6 +1,7 @@
 import random
 from colorama import Fore, Style, init
 import time
+import numpy as np
 
 # Initialize colorama
 init()
@@ -10,11 +11,14 @@ BLACKJACK = 21
 DEALER_STAND = 17
 DECK = [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11]  # Card values for a single deck
 NUM_DECKS = 8  # Number of decks in the shoe
-SIMULATIONS = 1000000 # Number of simulations for Monte Carlo
+SIMULATIONS = 100  # Number of simulations for Monte Carlo
 RTP = 0.995  # Return-to-Player factor (e.g., 99.5%)
 
 # Mapping face cards and Ace to values
 FACE_CARD_MAPPING = {'T': 10, 'J': 10, 'Q': 10, 'K': 10, 'A': 11}  # Aces treated as 11
+
+# Set numpy to use PCG64 RNG
+rng = np.random.default_rng(np.random.PCG64())
 
 # Helper Functions
 def hand_value(cards):
@@ -26,81 +30,109 @@ def hand_value(cards):
         aces -= 1
     return total
 
-def simulate_dealer_hand(dealer_hand, shoe):
-    """Simulates the dealer's hand and returns the final value."""
-    while hand_value(dealer_hand) < DEALER_STAND:
-        dealer_hand.append(random.choice(shoe))
-    return dealer_hand
+def simulate_dealer_hand_vectorized(dealer_card, shoe, num_simulations):
+    """Vectorized simulation of dealer hands."""
+    dealer_hands = np.full(num_simulations, dealer_card)
+    dealer_totals = np.full(num_simulations, hand_value([dealer_card]))
+
+    while True:
+        hits = dealer_totals < DEALER_STAND
+        if not np.any(hits):
+            break
+
+        new_cards = rng.choice(shoe, size=num_simulations)
+        dealer_hands = np.where(hits, dealer_hands + new_cards, dealer_hands)
+        dealer_totals = np.where(hits, dealer_totals + new_cards, dealer_totals)
+        
+        # Adjust for aces
+        aces_to_adjust = (dealer_totals > BLACKJACK) & (dealer_hands == 11)
+        dealer_totals = np.where(aces_to_adjust, dealer_totals - 10, dealer_totals)
+
+    return dealer_totals
 
 def monte_carlo_ev(player_cards, dealer_card, shoe, action, simulations=SIMULATIONS):
     """
     Perform Monte Carlo simulations to estimate the EV for a given action.
-    Returns the EV of the action, adjusted for RTP.
+    Returns the EV of the action, adjusted for RTP, along with benchmarking data.
     """
     player_total = hand_value(player_cards)
     ev = 0
 
-    for _ in range(simulations):
-        shoe_copy = shoe[:]
-        random.shuffle(shoe_copy)
+    shoe_array = np.array(shoe)
+    checkpoint_means = []
 
-        if action == "Stand":
-            dealer_hand = [dealer_card]
-            dealer_hand = simulate_dealer_hand(dealer_hand, shoe_copy)
-            dealer_total = hand_value(dealer_hand)
-            if dealer_total > BLACKJACK or player_total > dealer_total:
-                ev += 1  # Win
-            elif player_total < dealer_total:
-                ev -= 1  # Lose
+    if action == "Stand":
+        start_time = time.time()
+        for checkpoint in range(10):
+            sub_simulations = simulations // 10
+            dealer_totals = simulate_dealer_hand_vectorized(dealer_card, shoe_array, sub_simulations)
+            ev += np.sum((dealer_totals > BLACKJACK) | (player_total > dealer_totals))
+            ev -= np.sum(player_total < dealer_totals)
+            checkpoint_means.append(ev / ((checkpoint + 1) * sub_simulations))
+        elapsed_time = time.time() - start_time
 
-        elif action == "Hit":
-            player_cards_hit = player_cards + [random.choice(shoe_copy)]
-            new_total = hand_value(player_cards_hit)
-            if new_total > BLACKJACK:
-                ev -= 1  # Bust
-            else:
-                dealer_hand = [dealer_card]
-                dealer_hand = simulate_dealer_hand(dealer_hand, shoe_copy)
-                dealer_total = hand_value(dealer_hand)
-                if dealer_total > BLACKJACK or new_total > dealer_total:
-                    ev += 1  # Win
-                elif new_total < dealer_total:
-                    ev -= 1  # Lose
+    elif action == "Hit":
+        start_time = time.time()
+        for checkpoint in range(10):
+            sub_simulations = simulations // 10
+            new_cards = rng.choice(shoe_array, size=sub_simulations)
+            new_totals = player_total + new_cards
 
-        elif action == "Double Down":
-            player_cards_double = player_cards + [random.choice(shoe_copy)]
-            new_total = hand_value(player_cards_double)
-            bet = 2  # Doubling the bet
-            if new_total > BLACKJACK:
-                ev -= bet  # Bust
-            else:
-                dealer_hand = [dealer_card]
-                dealer_hand = simulate_dealer_hand(dealer_hand, shoe_copy)
-                dealer_total = hand_value(dealer_hand)
-                if dealer_total > BLACKJACK or new_total > dealer_total:
-                    ev += bet  # Win
-                elif new_total < dealer_total:
-                    ev -= bet  # Lose
+            dealer_totals = simulate_dealer_hand_vectorized(dealer_card, shoe_array, sub_simulations)
 
-        elif action == "Split":
-            split_ev = 0
-            # Simulate dealer hand once for consistency across split simulations
-            dealer_hand = [dealer_card]
-            dealer_hand = simulate_dealer_hand(dealer_hand, shoe_copy)
-            dealer_total = hand_value(dealer_hand)
+            win_conditions = (new_totals <= BLACKJACK) & ((dealer_totals > BLACKJACK) | (new_totals > dealer_totals))
+            lose_conditions = (new_totals <= BLACKJACK) & (new_totals < dealer_totals)
+            bust_conditions = new_totals > BLACKJACK
 
-            for _ in range(2):  # Simulate two split hands
-                hand = [player_cards[0], random.choice(shoe_copy)]
-                hand_total = hand_value(hand)
-                if hand_total > BLACKJACK:
-                    split_ev -= 1  # Bust
-                elif dealer_total > BLACKJACK or hand_total > dealer_total:
-                    split_ev += 1  # Win
-                elif hand_total < dealer_total:
-                    split_ev -= 1  # Lose
-            ev += split_ev / 2  # Average EV of both hands
+            ev += np.sum(win_conditions)
+            ev -= np.sum(lose_conditions)
+            ev -= np.sum(bust_conditions)
+            checkpoint_means.append(ev / ((checkpoint + 1) * sub_simulations))
+        elapsed_time = time.time() - start_time
 
-    return (ev / simulations) * RTP
+    elif action == "Double Down":
+        start_time = time.time()
+        for checkpoint in range(10):
+            sub_simulations = simulations // 10
+            new_cards = rng.choice(shoe_array, size=sub_simulations)
+            new_totals = player_total + new_cards
+
+            dealer_totals = simulate_dealer_hand_vectorized(dealer_card, shoe_array, sub_simulations)
+
+            win_conditions = (new_totals <= BLACKJACK) & ((dealer_totals > BLACKJACK) | (new_totals > dealer_totals))
+            lose_conditions = (new_totals <= BLACKJACK) & (new_totals < dealer_totals)
+            bust_conditions = new_totals > BLACKJACK
+
+            ev += 2 * np.sum(win_conditions)
+            ev -= 2 * np.sum(lose_conditions)
+            ev -= 2 * np.sum(bust_conditions)
+            checkpoint_means.append(ev / ((checkpoint + 1) * sub_simulations))
+        elapsed_time = time.time() - start_time
+
+    elif action == "Split":
+        start_time = time.time()
+        split_ev = 0
+        for _ in range(2):  # Simulate two split hands
+            for checkpoint in range(10):
+                sub_simulations = simulations // 10
+                split_card = player_cards[0]
+                new_cards = rng.choice(shoe_array, size=sub_simulations)
+                new_totals = split_card + new_cards
+
+                dealer_totals = simulate_dealer_hand_vectorized(dealer_card, shoe_array, sub_simulations)
+
+                win_conditions = (new_totals <= BLACKJACK) & ((dealer_totals > BLACKJACK) | (new_totals > dealer_totals))
+                lose_conditions = (new_totals <= BLACKJACK) & (new_totals < dealer_totals)
+                bust_conditions = new_totals > BLACKJACK
+
+                split_ev += np.sum(win_conditions)
+                split_ev -= np.sum(lose_conditions)
+                split_ev -= np.sum(bust_conditions)
+            checkpoint_means.append(split_ev / ((checkpoint + 1) * sub_simulations * 2))
+        ev += split_ev / 2
+        elapsed_time = time.time() - start_time
+
+    return (ev / simulations) * RTP, elapsed_time, checkpoint_means
 
 # Main Gameplay Logic
 def get_player_action(player_cards, dealer_card, shoe, is_first_turn=True):
@@ -115,9 +147,14 @@ def get_player_action(player_cards, dealer_card, shoe, is_first_turn=True):
     if len(player_cards) == 2 and player_cards[0] == player_cards[1]:
         actions.append("Split")
 
-    start_time = time.time()
-    evs = {action: monte_carlo_ev(player_cards, dealer_card, shoe, action) for action in actions}
-    elapsed_time = time.time() - start_time
+    evs = {}
+    times = {}
+    checkpoints = {}
+    for action in actions:
+        ev, elapsed_time, checkpoint_means = monte_carlo_ev(player_cards, dealer_card, shoe, action)
+        evs[action] = ev
+        times[action] = elapsed_time
+        checkpoints[action] = checkpoint_means
 
     sorted_actions = sorted(evs.items(), key=lambda item: item[1], reverse=True)
     best_action = sorted_actions[0][0]
@@ -131,12 +168,13 @@ def get_player_action(player_cards, dealer_card, shoe, is_first_turn=True):
     print("Expected Values (EVs):")
     for action, ev in evs.items():
         if action == best_action:
-            print(f"  {Fore.GREEN}{action}: {ev:.5f}{Style.RESET_ALL}")  # Highlight optimal action in green
+            print(f"  {Fore.GREEN}{action}: {ev:.5f} ({times[action]:.2f}s) {Style.RESET_ALL}")
         else:
-            print(f"  {action}: {ev:.5f}")
+            print(f"  {action}: {ev:.5f} ({times[action]:.2f}s)")
+        print(f"    Checkpoint Means: {checkpoints[action]}")
     print(f"    EVdiff: {ev_diff:.5f} VS ({second_best_action})")
     print(f"")
-    print(f"Optimal Action: {best_action} ({elapsed_time:.2f} seconds)")
+    print(f"Optimal Action: {best_action} ({times[best_action]:.2f} seconds)")
 
     return best_action
 

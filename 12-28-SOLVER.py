@@ -10,7 +10,7 @@ BLACKJACK = 21
 DEALER_STAND = 17
 DECK = [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11]  # Card values for a single deck
 NUM_DECKS = 8  # Number of decks in the shoe
-SIMULATIONS = 1000000 # Number of simulations for Monte Carlo
+SIMULATIONS = 10000  # Number of simulations for Monte Carlo
 RTP = 0.995  # Return-to-Player factor (e.g., 99.5%)
 
 # Mapping face cards and Ace to values
@@ -39,8 +39,9 @@ def monte_carlo_ev(player_cards, dealer_card, shoe, action, simulations=SIMULATI
     """
     player_total = hand_value(player_cards)
     ev = 0
+    stability_metrics = []
 
-    for _ in range(simulations):
+    for i in range(1, simulations + 1):
         shoe_copy = shoe[:]
         random.shuffle(shoe_copy)
 
@@ -100,6 +101,12 @@ def monte_carlo_ev(player_cards, dealer_card, shoe, action, simulations=SIMULATI
                     split_ev -= 1  # Lose
             ev += split_ev / 2  # Average EV of both hands
 
+        # Track stability metrics
+        if i % (simulations // 10) == 0:  # Record every 10% of progress
+            current_mean = ev / i
+            stability_metrics.append(f"{current_mean:.5f}")
+
+    print("Convergence (Mean at 10% checkpoints):", stability_metrics)
     return (ev / simulations) * RTP
 
 # Main Gameplay Logic
@@ -135,6 +142,7 @@ def get_player_action(player_cards, dealer_card, shoe, is_first_turn=True):
         else:
             print(f"  {action}: {ev:.5f}")
     print(f"    EVdiff: {ev_diff:.5f} VS ({second_best_action})")
+    print(f"    Time to converge: {elapsed_time:.2f} seconds")
     print(f"")
     print(f"Optimal Action: {best_action} ({elapsed_time:.2f} seconds)")
 
