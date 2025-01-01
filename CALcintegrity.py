@@ -69,8 +69,8 @@ def monte_carlo_ev(player_cards, dealer_card, shoe, action, simulations=SIMULATI
                     ev -= 1  # Lose
 
         elif action == "Double Down":
-            player_cards_double = player_cards + [random.choice(shoe_copy)]
-            new_total = hand_value(player_cards_double)
+            # Double Down EV is calculated without actually drawing a card in the main loop
+            new_total = hand_value(player_cards)
             bet = 2  # Doubling the bet
             if new_total > BLACKJACK:
                 ev -= bet  # Bust
@@ -219,8 +219,7 @@ def main():
                         break
 
                 elif best_action == "Double Down":
-                    player_cards.append(random.choice(adjusted_shoe))
-                    print(f"\nFinal hand after doubling down: {player_cards} (Total: {hand_value(player_cards)})")
+                    print("\nYou chose to double down. Ending turn.")
                     break
 
                 elif best_action == "Split":

@@ -9,7 +9,7 @@ init()
 BLACKJACK = 21
 DEALER_STAND = 17
 NUM_DECKS = 6
-SIMULATIONS = 100000  # <= You can reduce this for testing
+SIMULATIONS = 1000000  # <= You can reduce this for testing
 RTP = 0.995
 
 ALL_RANKS = ['2','3','4','5','6','7','8','9','T','J','Q','K','A']

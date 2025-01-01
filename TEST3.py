@@ -11,7 +11,6 @@ DEALER_STAND = 17
 NUM_DECKS = 6
 SIMULATIONS = 1000000
 RTP = 0.995
-
 ALL_RANKS = ['2','3','4','5','6','7','8','9','T','J','Q','K','A']
 RANK_TO_NAME = {
     '2': 'Twos', '3': 'Threes', '4': 'Fours', '5': 'Fives',
@@ -75,7 +74,6 @@ def hand_value(cards):
 def simulate_dealer_hands(dealer_card_val, shoe_counts, num_simulations):
     shoe_list = build_shoe_list(shoe_counts)
     final_totals = [0] * num_simulations
-    
     for i in range(num_simulations):
         dealer_cards = [dealer_card_val]
         while True:
@@ -94,11 +92,10 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
     player_total = hand_value(player_cards)
     ev = 0
     checkpoint_means = []
-    
     print(f"\nAction: {action}, Player Total: {player_total}, Dealer Card: {dealer_card_val}")
     start_time = time.time()
     chunk_size = simulations // 10
-    
+
     def process_results_for_stand_like(player_t, dealer_totals_list, multiplier=1):
         if player_t > BLACKJACK:
             return -multiplier * len(dealer_totals_list)
@@ -119,7 +116,6 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
             ev_chunk = process_results_for_stand_like(player_total, dealer_totals, multiplier=1)
             ev += ev_chunk
             checkpoint_means.append(ev / ((i + 1) * chunk_size))
-            
     elif action == "Hit":
         for i in range(10):
             shoe_list = build_shoe_list(shoe_counts)
@@ -129,7 +125,6 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
             for _ in range(chunk_size):
                 draw_val = random.choice(shoe_list)
                 new_totals.append(player_total + draw_val)
-            
             dealer_totals = simulate_dealer_hands(dealer_card_val, shoe_counts, chunk_size)
             ev_chunk = 0
             for p_t, d_t in zip(new_totals, dealer_totals):
@@ -142,7 +137,6 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
                         ev_chunk -= 1
             ev += ev_chunk
             checkpoint_means.append(ev / ((i + 1) * chunk_size))
-            
     elif action == "Double Down":
         for i in range(10):
             shoe_list = build_shoe_list(shoe_counts)
@@ -152,7 +146,6 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
             for _ in range(chunk_size):
                 draw_val = random.choice(shoe_list)
                 new_totals.append(player_total + draw_val)
-            
             dealer_totals = simulate_dealer_hands(dealer_card_val, shoe_counts, chunk_size)
             ev_chunk = 0
             for p_t, d_t in zip(new_totals, dealer_totals):
@@ -165,11 +158,9 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
                         ev_chunk -= 2
             ev += ev_chunk
             checkpoint_means.append(ev / ((i + 1) * chunk_size))
-            
     elif action == "Split":
         split_ev_accumulator = 0
         split_card_val = player_cards[0]
-        
         for split_index in range(2):
             hand_ev = 0
             for i in range(10):
@@ -180,7 +171,6 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
                 for _ in range(chunk_size):
                     draw_val = random.choice(shoe_list)
                     new_totals.append(split_card_val + draw_val)
-                
                 dealer_totals = simulate_dealer_hands(dealer_card_val, shoe_counts, chunk_size)
                 ev_chunk = 0
                 for p_t, d_t in zip(new_totals, dealer_totals):
@@ -199,22 +189,20 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
 
     elapsed_time = time.time() - start_time
     final_ev = (ev / simulations) * RTP
-    
     print(f"Final EV for {action}: {final_ev:.5f}, Time: {elapsed_time:.2f}s")
     if checkpoint_means:
         benchmarks = " | ".join([f"{(i + 1) * 10}%: {val:.5f}" for i, val in enumerate(checkpoint_means)])
-        print(f"Convergence Benchmarks (Mean EV at 10% checkpoints): [{benchmarks}]")
+        print(f"Convergence: [{benchmarks}]")
     else:
         print("No convergence benchmarks available for this action.")
-        
     return final_ev, elapsed_time, checkpoint_means
 
 def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=True):
     actions = ["Stand", "Hit"]
     if is_first_turn:
         actions.append("Double Down")
-    if len(player_cards) == 2 and player_cards[0] == player_cards[1]:
-        actions.append("Split")
+        if len(player_cards) == 2 and player_cards[0] == player_cards[1]:
+            actions.append("Split")
     
     evs = {}
     times = {}
@@ -222,17 +210,16 @@ def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=
         ev, elapsed_time, _ = monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action)
         evs[action] = ev
         times[action] = elapsed_time
-    
+
     sorted_actions = sorted(evs.items(), key=lambda x: x[1], reverse=True)
     best_action = sorted_actions[0][0]
     second_best_action = sorted_actions[1][0] if len(sorted_actions) > 1 else None
     ev_diff = sorted_actions[0][1] - sorted_actions[1][1] if len(sorted_actions) > 1 else 0
-    
+
     print("\nPlayer Cards (numeric):", player_cards, "Total:", hand_value(player_cards))
     print("Dealer Card (value):", dealer_card_val)
     print("Expected Values (EVs):")
     
-    # Print each action's EV, with the EVdiff line following the best action
     printed_best = False
     for action, evval in evs.items():
         if action == best_action:
@@ -242,14 +229,11 @@ def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=
         else:
             color_str = ""
             reset_str = ""
-        
         print(f" {color_str}{action}: {evval:.5f} ({times[action]:.2f}s){reset_str}")
-        
-        # Print EVdiff immediately after the best action
         if printed_best and best_action == action and second_best_action:
-            print(f"  EVdiff: {Fore.MAGENTA}{ev_diff:.5f}{Style.RESET_ALL} vs {second_best_action}")
+            print(f"  *EVdiff: {Fore.MAGENTA}{ev_diff:.5f}{Style.RESET_ALL} vs {second_best_action}")
             printed_best = False
-    
+
     print(f"\nOptimal Action: {best_action} ({times[best_action]:.2f} seconds)\n")
     return best_action
 
@@ -280,47 +264,76 @@ def main():
                 running_count = 0
                 print("\nShoe has been reset! Starting a new hand...\n")
                 continue
-                
+            
             if len(dealer_card_input) != 1:
                 raise ValueError("Dealer input must be exactly 1 character!")
             if dealer_card_input not in ALL_RANKS:
                 raise ValueError("Invalid dealer card input!")
-                
+            
             remove_card_from_shoe(shoe_counts, dealer_card_input)
             dealer_card_val = RANK_TO_VALUE[dealer_card_input]
             
-            player_input = input("Enter Player's cards (2 chars, e.g. 'T5', 'J9', '77') or 0 to reset: ").strip().upper()
-            if player_input == '0':
-                shoe_counts = initialize_shoe_counts(NUM_DECKS)
-                running_count = 0
-                print("\nShoe has been reset! Starting a new hand...\n")
-                continue
-                
-            if len(player_input) != 2:
-                raise ValueError("You must enter exactly two characters for the player's hand (e.g. 'T5').")
-                
             player_cards = []
-            for c in player_input:
-                if c not in ALL_RANKS:
-                    raise ValueError(f"Invalid player card '{c}'!")
-                remove_card_from_shoe(shoe_counts, c)
-                player_cards.append(RANK_TO_VALUE[c])
+            while True:
+                if not player_cards:
+                    player_input = input("Enter Player's cards (2 chars, e.g. 'T5', 'J9', '77') or 0 to reset: ").strip().upper()
+                    if player_input == '0':
+                        shoe_counts = initialize_shoe_counts(NUM_DECKS)
+                        running_count = 0
+                        print("\nShoe has been reset! Starting a new hand...\n")
+                        break
+                    
+                    if len(player_input) != 2:
+                        raise ValueError("You must enter exactly two characters for the player's hand (e.g. 'T5').")
+                    
+                    for c in player_input:
+                        if c not in ALL_RANKS:
+                            raise ValueError(f"Invalid player card '{c}'!")
+                        remove_card_from_shoe(shoe_counts, c)
+                        player_cards.append(RANK_TO_VALUE[c])
                 
-            best_action = get_player_action(player_cards, dealer_card_val, shoe_counts)
-            
+                pre_calc_removal = input("Enter cards to remove before calculations (e.g. 'T5') or 0 for none/reset: ").strip().upper()
+                if pre_calc_removal == '0':
+                    shoe_counts = initialize_shoe_counts(NUM_DECKS)
+                    running_count = 0
+                    print("\nShoe has been reset! Starting a new hand...\n")
+                    break
+                
+                if pre_calc_removal:
+                    for c in pre_calc_removal:
+                        if c not in ALL_RANKS:
+                            raise ValueError(f"Invalid removal card '{c}'!")
+                        remove_card_from_shoe(shoe_counts, c)
+                
+                best_action = get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=(len(player_cards) == 2))
+                
+                if best_action == "Hit":
+                    additional_card = input("Enter additional card (1 char) or 'S' to stand: ").strip().upper()
+                    if additional_card == 'S':
+                        break
+                    if len(additional_card) != 1 or additional_card not in ALL_RANKS:
+                        raise ValueError("Invalid additional card!")
+                    remove_card_from_shoe(shoe_counts, additional_card)
+                    player_cards.append(RANK_TO_VALUE[additional_card])
+                else:
+                    break
+                
+                print_shoe_status(shoe_counts, NUM_DECKS)
+                
+            # Existing final removal input (after calculations)
             final_removal_input = input("Enter final cards to remove (e.g. 'T5') or 0 for none/resets: ").strip().upper()
             if final_removal_input == '0':
                 shoe_counts = initialize_shoe_counts(NUM_DECKS)
                 running_count = 0
                 print("\nShoe has been reset! Starting a new hand...\n")
                 continue
-                
+            
             if final_removal_input:
                 for c in final_removal_input:
                     if c not in ALL_RANKS:
                         raise ValueError(f"Invalid removal card '{c}'!")
                     remove_card_from_shoe(shoe_counts, c)
-                    
+            
             print_shoe_status(shoe_counts, NUM_DECKS)
             print("Starting next hand...\n")
             
@@ -332,3 +345,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

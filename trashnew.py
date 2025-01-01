@@ -1,7 +1,6 @@
 import random
 from colorama import Fore, Style, init
 import time
-import numpy as np
 
 # Initialize colorama
 init()
@@ -9,11 +8,11 @@ init()
 # Constants
 BLACKJACK = 21
 DEALER_STAND = 17
-NUM_DECKS = 1
-SIMULATIONS = 1000000
+NUM_DECKS = 6
+SIMULATIONS = 10000000  # <= You can reduce this for testing
 RTP = 0.995
 
-ALL_RANKS = ['2','3','4','5','6','7','8','9','T','J','Q','K','A']
+ALL_RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A']
 
 RANK_TO_NAME = {
     '2': 'Twos',
@@ -38,19 +37,17 @@ RANK_TO_VALUE = {
     'A': 11
 }
 
-rng = np.random.default_rng(np.random.PCG64())
-
 def initialize_shoe_counts(num_decks):
-    """Returns a dict { rank: count } for each rank in ALL_RANKS, with 4 * num_decks copies each."""
+    """Returns a dict { rank: count } for each rank, with 4 * num_decks copies each."""
     shoe_counts = {}
     for rank in ALL_RANKS:
         shoe_counts[rank] = 4 * num_decks
     return shoe_counts
 
 def print_shoe_status(shoe_counts, num_decks):
-    """Print how many copies of each card remain in the shoe."""
+    """Print how many copies of each card remain in the shoe, descending order (A down to 2)."""
     print("\nCurrent Shoe Status:")
-    for rank in ALL_RANKS:
+    for rank in reversed(ALL_RANKS):
         max_copies = 4 * num_decks
         current = shoe_counts[rank]
         rank_name = RANK_TO_NAME[rank]
@@ -67,11 +64,12 @@ def remove_card_from_shoe(shoe_counts, rank):
     else:
         raise ValueError(f"Card '{rank}' not found (count is 0).")
 
-def build_numeric_shoe_array(shoe_counts):
+def build_shoe_list(shoe_counts):
     """
-    Converts shoe_counts into a numeric array suitable for rng.choice.
-    e.g., if shoe_counts = {'A': 2, 'K': 4, ...}, we produce an array
-    with 2 copies of 11 (Ace), 4 copies of 10 (King), etc.
+    Converts shoe_counts into a simple list of card values from RANK_TO_VALUE.
+    For example, if shoe_counts = {'A': 2, 'K': 4}, we return a list
+    with 2 copies of 11, 4 copies of 10, etc.
+    This list is used for random draws *with replacement* in each simulation step.
     """
     cards_list = []
     for rank in ALL_RANKS:
@@ -79,7 +77,7 @@ def build_numeric_shoe_array(shoe_counts):
         val = RANK_TO_VALUE[rank]
         if count > 0:
             cards_list.extend([val] * count)
-    return np.array(cards_list, dtype=int)
+    return cards_list
 
 def hand_value(cards):
     """Calculate the total value of a hand, accounting for soft aces."""
@@ -90,103 +88,123 @@ def hand_value(cards):
         aces -= 1
     return total
 
-def simulate_dealer_hand_vectorized(dealer_card_val, shoe_counts, num_simulations):
-    """Vectorized simulation of dealer hands using the numeric shoe array."""
-    shoe_array = build_numeric_shoe_array(shoe_counts)
+def simulate_dealer_hands(dealer_card_val, shoe_counts, num_simulations):
+    """
+    Simulate the dealer's final totals for 'num_simulations' rounds,
+    each time starting from 'dealer_card_val' and hitting until >= DEALER_STAND or bust.
+    Dynamically updates shoe_counts during simulation.
+    """
+    final_totals = []
 
-    dealer_hands = np.full(num_simulations, dealer_card_val)
-    dealer_totals = np.full(num_simulations, hand_value([dealer_card_val]))
+    for _ in range(num_simulations):
+        dealer_cards = [dealer_card_val]
+        while True:
+            total = hand_value(dealer_cards)
+            if total < DEALER_STAND:
+                available_cards = [rank for rank, count in shoe_counts.items() if count > 0]
+                if not available_cards:
+                    break
 
-    while True:
-        hits = dealer_totals < DEALER_STAND
-        if not np.any(hits):
-            break
+                draw_rank = random.choice(available_cards)
+                dealer_cards.append(RANK_TO_VALUE[draw_rank])
+                shoe_counts[draw_rank] -= 1
 
-        new_cards = rng.choice(shoe_array, size=num_simulations)
-        dealer_hands = np.where(hits, dealer_hands + new_cards, dealer_hands)
-        dealer_totals = np.where(hits, dealer_totals + new_cards, dealer_totals)
+            else:
+                final_totals.append(total)
+                break
 
-        # Adjust for aces if total > 21
-        hits_aces = (dealer_totals > BLACKJACK) & (dealer_hands == 11)
-        dealer_totals = np.where(hits_aces, dealer_totals - 10, dealer_totals)
-
-    return dealer_totals
+    return final_totals
 
 def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulations=SIMULATIONS):
-    """Estimate the EV for a given action using Monte Carlo simulations."""
+    """
+    Estimate the EV for a given action using Monte Carlo simulations.
+    'player_cards' = list of integer values for player's initial cards
+    'dealer_card_val' = integer value for dealer's visible card
+    'shoe_counts' = current shoe state
+    'action' = 'Stand', 'Hit', 'Double Down', or 'Split'
+    'simulations' = how many total simulations to run
+    """
+    start_time = time.time()
     player_total = hand_value(player_cards)
     ev = 0
 
-    print(f"\nAction: {action}, Player Total: {player_total}, Dealer Card: {dealer_card_val}")
+    def process_results_for_stand_like(player_t, dealer_totals_list, multiplier=1):
+        """For standard stand/hit/double logic."""
+        if player_t > BLACKJACK:
+            return -multiplier * len(dealer_totals_list)
 
-    import time
-    start_time = time.time()
-    chunk_size = simulations // 10
+        chunk_ev = 0
+        for d_total in dealer_totals_list:
+            if d_total > BLACKJACK:
+                chunk_ev += multiplier
+            else:
+                if player_t > d_total:
+                    chunk_ev += multiplier
+                elif player_t < d_total:
+                    chunk_ev -= multiplier
+        return chunk_ev
 
     if action == "Stand":
-        for i in range(10):
-            dealer_totals = simulate_dealer_hand_vectorized(dealer_card_val, shoe_counts, chunk_size)
-            ev += np.sum((dealer_totals > BLACKJACK) | (player_total > dealer_totals))
-            ev -= np.sum(player_total < dealer_totals)
+        dealer_totals = simulate_dealer_hands(dealer_card_val, shoe_counts.copy(), simulations)
+        ev = process_results_for_stand_like(player_total, dealer_totals, multiplier=1)
 
     elif action == "Hit":
-        for i in range(10):
-            shoe_array = build_numeric_shoe_array(shoe_counts)
-            new_cards = rng.choice(shoe_array, size=chunk_size)
-            new_totals = player_total + new_cards
+        for _ in range(simulations):
+            available_cards = [rank for rank, count in shoe_counts.items() if count > 0]
+            if not available_cards:
+                break
 
-            dealer_totals = simulate_dealer_hand_vectorized(dealer_card_val, shoe_counts, chunk_size)
+            draw_rank = random.choice(available_cards)
+            shoe_counts[draw_rank] -= 1
+            new_total = hand_value(player_cards + [RANK_TO_VALUE[draw_rank]])
 
-            win_conditions = (new_totals <= BLACKJACK) & ((dealer_totals > BLACKJACK) | (new_totals > dealer_totals))
-            lose_conditions = (new_totals <= BLACKJACK) & (new_totals < dealer_totals)
-            bust_conditions = (new_totals > BLACKJACK)
-
-            ev += np.sum(win_conditions)
-            ev -= np.sum(lose_conditions)
-            ev -= np.sum(bust_conditions)
+            if new_total > BLACKJACK:
+                ev -= 1
+            else:
+                dealer_totals = simulate_dealer_hands(dealer_card_val, shoe_counts.copy(), 1)
+                ev += process_results_for_stand_like(new_total, dealer_totals, multiplier=1)
 
     elif action == "Double Down":
-        for i in range(10):
-            shoe_array = build_numeric_shoe_array(shoe_counts)
-            new_cards = rng.choice(shoe_array, size=chunk_size)
-            new_totals = player_total + new_cards
+        for _ in range(simulations):
+            available_cards = [rank for rank, count in shoe_counts.items() if count > 0]
+            if not available_cards:
+                break
 
-            dealer_totals = simulate_dealer_hand_vectorized(dealer_card_val, shoe_counts, chunk_size)
+            draw_rank = random.choice(available_cards)
+            shoe_counts[draw_rank] -= 1
+            new_total = hand_value(player_cards + [RANK_TO_VALUE[draw_rank]])
 
-            win_conditions = (new_totals <= BLACKJACK) & ((dealer_totals > BLACKJACK) | (new_totals > dealer_totals))
-            lose_conditions = (new_totals <= BLACKJACK) & (new_totals < dealer_totals)
-            bust_conditions = (new_totals > BLACKJACK)
-
-            ev += 2 * np.sum(win_conditions)
-            ev -= 2 * np.sum(lose_conditions)
-            ev -= 2 * np.sum(bust_conditions)
+            if new_total > BLACKJACK:
+                ev -= 2
+            else:
+                dealer_totals = simulate_dealer_hands(dealer_card_val, shoe_counts.copy(), 1)
+                ev += process_results_for_stand_like(new_total, dealer_totals, multiplier=2)
 
     elif action == "Split":
-        split_ev = 0
-        for _ in range(2):
-            for i in range(10):
-                shoe_array = build_numeric_shoe_array(shoe_counts)
-                split_card_val = player_cards[0]
-                new_cards = rng.choice(shoe_array, size=chunk_size)
-                new_totals = split_card_val + new_cards
+        split_ev_accumulator = 0
+        split_card_val = player_cards[0]
 
-                dealer_totals = simulate_dealer_hand_vectorized(dealer_card_val, shoe_counts, chunk_size)
+        for _ in range(simulations):
+            for _ in range(2):
+                available_cards = [rank for rank, count in shoe_counts.items() if count > 0]
+                if not available_cards:
+                    break
 
-                win_conditions = (new_totals <= BLACKJACK) & ((dealer_totals > BLACKJACK) | (new_totals > dealer_totals))
-                lose_conditions = (new_totals <= BLACKJACK) & (new_totals < dealer_totals)
-                bust_conditions = (new_totals > BLACKJACK)
+                draw_rank = random.choice(available_cards)
+                shoe_counts[draw_rank] -= 1
+                new_total = hand_value([split_card_val, RANK_TO_VALUE[draw_rank]])
 
-                split_ev += np.sum(win_conditions)
-                split_ev -= np.sum(lose_conditions)
-                split_ev -= np.sum(bust_conditions)
+                if new_total > BLACKJACK:
+                    split_ev_accumulator -= 1
+                else:
+                    dealer_totals = simulate_dealer_hands(dealer_card_val, shoe_counts.copy(), 1)
+                    split_ev_accumulator += process_results_for_stand_like(new_total, dealer_totals, multiplier=1)
 
-        ev += split_ev / 2
+        ev = split_ev_accumulator / 2
 
+    final_ev = (ev / simulations) * RTP
     elapsed_time = time.time() - start_time
-    print(f"Final EV for {action}: {ev / simulations:.5f}, Time: {elapsed_time:.2f}s\n")
-
-    # Return the EV * RTP, plus time; no checkpoint means returned
-    return (ev / simulations) * RTP, elapsed_time, None
+    return final_ev, elapsed_time, None
 
 def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=True):
     """Determines the player's optimal action based on Monte Carlo EV."""
@@ -204,7 +222,6 @@ def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=
         evs[action] = ev
         times[action] = elapsed_time
 
-    # Sort by highest EV
     sorted_actions = sorted(evs.items(), key=lambda x: x[1], reverse=True)
     best_action = sorted_actions[0][0]
     second_best_action = sorted_actions[1][0] if len(sorted_actions) > 1 else None
@@ -217,38 +234,30 @@ def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=
         color_str = Fore.GREEN if action == best_action else ""
         reset_str = Style.RESET_ALL if action == best_action else ""
         print(f"  {color_str}{action}: {evval:.5f} ({times[action]:.2f}s){reset_str}")
+        if action == best_action and second_best_action is not None:
+            print(f"    EVdiff: {Fore.MAGENTA}{ev_diff:.5f}{Style.RESET_ALL} vs {second_best_action}")
 
-    print(f"    EVdiff: {ev_diff:.5f} vs {second_best_action}")
     print(f"\nOptimal Action: {best_action} ({times[best_action]:.2f} seconds)\n")
     return best_action
 
 def main():
-    print("Blackjack Optimal Strategy Solver with a Persistent Shoe State\n")
+    print("Blackjack Optimal Strategy Solver (No NumPy) with a Persistent Shoe State\n")
     print("(Type '0' in the dealer/player/removal prompts to reset the shoe and start a new sequence)\n")
 
-    # Initialize the shoe once
     shoe_counts = initialize_shoe_counts(NUM_DECKS)
 
     while True:
-        # Backup the shoe state at the start of the round
         backup_shoe_counts = shoe_counts.copy()
 
         try:
-            # --------------------------------
-            # Instead of full shoe status here:
-            # --------------------------------
-
-            # We'll compute total cards
             total_cards = 52 * NUM_DECKS
             current_remaining = sum(shoe_counts.values())
             played = total_cards - current_remaining
             played_pct = (played / total_cards) * 100
             remain_pct = 100 - played_pct
-            # Print the single-line status
             print(f"{played} / {total_cards} ({played_pct:.2f}%) played | "
                   f"{current_remaining} / {total_cards} ({remain_pct:.2f}%) remaining")
 
-            # 1) Dealer card
             dealer_card_input = input(
                 "Enter Dealer's visible card (2-9 or T/J/Q/K/A) or 0 to reset: "
             ).strip().upper()
@@ -265,9 +274,8 @@ def main():
             remove_card_from_shoe(shoe_counts, dealer_card_input)
             dealer_card_val = RANK_TO_VALUE[dealer_card_input]
 
-            # 2) Player cards
             player_input = input(
-                "Enter Player's cards (e.g. 'T5', 'J9', '77') or 0 to reset: "
+                "Enter Player's cards (2 chars, e.g. 'T5', 'J9', '77') or 0 to reset: "
             ).strip().upper()
 
             if player_input == '0':
@@ -275,8 +283,10 @@ def main():
                 print("\nShoe has been reset! Starting a new hand...\n")
                 continue
 
-            if len(player_input) == 0:
-                raise ValueError("Player's hand cannot be empty!")
+            if len(player_input) != 2:
+                raise ValueError(
+                    "You must enter exactly two characters for the player's hand (e.g. 'T5')."
+                )
 
             player_cards = []
             for c in player_input:
@@ -285,15 +295,12 @@ def main():
                 remove_card_from_shoe(shoe_counts, c)
                 player_cards.append(RANK_TO_VALUE[c])
 
-            # 3) Additional removal
             removal_input = input(
                 "Enter cards to remove (e.g. 'T5') or 0 for none/resets: "
             ).strip().upper()
 
             if removal_input == '0':
-                # This means "0" for none, OR user typed "0" to reset:
-                # We'll treat it as shoe reset if the user typed exactly '0'
-                if len(removal_input) == 1:  
+                if len(removal_input) == 1:
                     shoe_counts = initialize_shoe_counts(NUM_DECKS)
                     print("\nShoe has been reset! Starting a new hand...\n")
                     continue
@@ -304,7 +311,6 @@ def main():
                         raise ValueError(f"Invalid removal card '{c}'!")
                     remove_card_from_shoe(shoe_counts, c)
 
-            # Decide best action
             while True:
                 best_action = get_player_action(
                     player_cards,
@@ -335,17 +341,7 @@ def main():
                         break
 
                 elif best_action == "Double Down":
-                    numeric_shoe = build_numeric_shoe_array(shoe_counts)
-                    if len(numeric_shoe) == 0:
-                        raise ValueError("Shoe is empty, can't draw a card!")
-                    drawn_val = random.choice(numeric_shoe)
-                    for rank in ALL_RANKS:
-                        if RANK_TO_VALUE[rank] == drawn_val and shoe_counts[rank] > 0:
-                            remove_card_from_shoe(shoe_counts, rank)
-                            player_cards.append(drawn_val)
-                            print(f"\nDrew a '{rank}' for Double Down.")
-                            break
-                    print(f"Final hand after doubling: {player_cards} (Total: {hand_value(player_cards)})\n")
+                    print("You chose to Double Down. (No extra card drawn.) Ending turn.\n")
                     break
 
                 elif best_action == "Split":
@@ -354,7 +350,6 @@ def main():
                     print(f"EV for split: {ev_split:.5f}\n")
                     break
 
-            # ---- PRINT SHOE STATUS AGAIN BEFORE NEXT HAND ----
             print_shoe_status(shoe_counts, NUM_DECKS)
             print("Starting next hand...\n")
 
