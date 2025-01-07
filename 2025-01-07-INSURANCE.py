@@ -297,6 +297,7 @@ def main():
     print("Blackjack Optimal Strategy Solver (No NumPy) with a Persistent Shoe State\n")
     print("(Type '0' in the dealer/player/removal prompts to reset the shoe and start a new sequence)\n")
     
+
     shoe_counts = initialize_shoe_counts(NUM_DECKS)
     running_count = 0
     
@@ -332,12 +333,14 @@ def main():
             remove_card_from_shoe(shoe_counts, dealer_card_input)
             dealer_card_val = RANK_TO_VALUE[dealer_card_input]
             if dealer_card_input == 'A':
-                insurance_ev = calculate_insurance_ev(shoe_counts)
-                print(f"\nInsurance EV: {insurance_ev:.5f}")
+              insurance_ev = calculate_insurance_ev(shoe_counts)
             if insurance_ev > 0:
-                print(f"{Fore.GREEN}Insurance bet is profitable{Style.RESET_ALL}")
+                print(f"\nInsurance EV: {Fore.GREEN + Style.BRIGHT}{insurance_ev:.5f}{Style.RESET_ALL}")
+                print(f"{Fore.GREEN + Style.DIM}Insurance bet is profitable{Style.RESET_ALL}")
             else:
-                print(f"{Fore.RED}Insurance bet is unprofitable{Style.RESET_ALL}")
+                print(f"\nInsurance EV: {Fore.RED + Style.BRIGHT}{insurance_ev:.5f}{Style.RESET_ALL}")
+                print(f"{Fore.RED + Style.DIM}Insurance bet is unprofitable{Style.RESET_ALL}")
+
             
             player_input = input("Enter Player's cards (2 chars, e.g. 'T5', 'J9', '77') or 0 to reset: ").strip().upper()
             if player_input == '0':
