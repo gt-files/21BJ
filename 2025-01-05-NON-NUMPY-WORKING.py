@@ -75,11 +75,24 @@ def print_shoe_status(shoe_counts, num_decks):
 
 def remove_card_from_shoe(shoe_counts, rank):
     global running_count
-    if shoe_counts[rank] > 0:
-        shoe_counts[rank] -= 1
-        running_count += COUNTING_SYSTEM[rank]
+    # Handle blackjack combinations (AK, AQ, AJ, AT)
+    if len(rank) == 2 and rank[0] == 'A' and rank[1] in ['K', 'Q', 'J', 'T']:
+        # Remove both cards individually
+        if shoe_counts['A'] > 0 and shoe_counts[rank[1]] > 0:
+            shoe_counts['A'] -= 1
+            shoe_counts[rank[1]] -= 1
+            running_count += COUNTING_SYSTEM['A'] + COUNTING_SYSTEM[rank[1]]
+        else:
+            raise ValueError(f"Cards '{rank}' not found (count is 0).")
+    # Handle single card removal
+    elif len(rank) == 1:
+        if shoe_counts[rank] > 0:
+            shoe_counts[rank] -= 1
+            running_count += COUNTING_SYSTEM[rank]
+        else:
+            raise ValueError(f"Card '{rank}' not found (count is 0).")
     else:
-        raise ValueError(f"Card '{rank}' not found (count is 0).")
+        raise ValueError("Invalid card input format")
 
 def build_shoe_list(shoe_counts):
     cards_list = []
@@ -306,7 +319,6 @@ def main():
     global running_count
     print("Blackjack Optimal Strategy Solver (No NumPy) with a Persistent Shoe State\n")
     print("(Type '0' in the dealer/player/removal prompts to reset the shoe and start a new sequence)\n")
-    
     shoe_counts = initialize_shoe_counts(NUM_DECKS)
     running_count = 0
     
@@ -327,18 +339,31 @@ def main():
                   f"Divisor: {divisor:.1f} | "
                   f"True Count: {true_count:.1f}")
             
-            dealer_card_input = input("Enter Dealer's visible card (2-9 or T/J/Q/K/A) or 0 to reset: ").strip().upper()
+            dealer_card_input = input("Enter Dealer's visible card (2-9 or T/J/Q/K/A) or blackjack combo (AJ/AQ/AK/AT) or 0 to reset: ").strip().upper()
+
             if dealer_card_input == '0':
                 shoe_counts = initialize_shoe_counts(NUM_DECKS)
                 running_count = 0
                 print("\nShoe has been reset! Starting a new hand...\n")
                 continue
-                
-            if len(dealer_card_input) != 1:
-                raise ValueError("Dealer input must be exactly 1 character!")
-            if dealer_card_input not in ALL_RANKS:
-                raise ValueError("Invalid dealer card input!")
-                
+
+            # Handle blackjack combinations
+            if len(dealer_card_input) == 2:
+                if dealer_card_input[0] == 'A' and dealer_card_input[1] in ['J', 'Q', 'K', 'T']:
+                    # Remove both cards for blackjack
+                    remove_card_from_shoe(shoe_counts, dealer_card_input[0])  # Remove Ace
+                    remove_card_from_shoe(shoe_counts, dealer_card_input[1])  # Remove face card
+                    dealer_card_val = RANK_TO_VALUE['A']  # Use Ace value for calculations
+                else:
+                    raise ValueError("Invalid dealer blackjack combination! Use AJ, AQ, AK, or AT")
+            elif len(dealer_card_input) == 1:
+                if dealer_card_input not in ALL_RANKS:
+                    raise ValueError("Invalid dealer card input!")
+                remove_card_from_shoe(shoe_counts, dealer_card_input)
+                dealer_card_val = RANK_TO_VALUE[dealer_card_input]
+            else:
+                raise ValueError("Dealer input must be either 1 or 2 characters!")
+                            
             remove_card_from_shoe(shoe_counts, dealer_card_input)
             dealer_card_val = RANK_TO_VALUE[dealer_card_input]
             

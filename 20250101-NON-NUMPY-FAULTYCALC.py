@@ -277,6 +277,13 @@ def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=
     print(f"\nOptimal Action: {Fore.GREEN}{best_action}{Style.RESET_ALL} ({times[best_action]:.2f} seconds)\n")
     return best_action
 
+def calculate_insurance_ev(shoe_counts):
+    total_cards = sum(shoe_counts.values())
+    ten_value_cards = shoe_counts['T'] + shoe_counts['J'] + shoe_counts['Q'] + shoe_counts['K']
+    prob_dealer_blackjack = ten_value_cards / total_cards
+    insurance_ev = (prob_dealer_blackjack * 2) - 1
+    return insurance_ev
+
 def main():
     global running_count
     print("Blackjack Optimal Strategy Solver (No NumPy) with a Persistent Shoe State\n")
@@ -312,6 +319,14 @@ def main():
                 
             remove_card_from_shoe(shoe_counts, dealer_card_input)
             dealer_card_val = RANK_TO_VALUE[dealer_card_input]
+            if dealer_card_input == 'A':
+                insurance_ev = calculate_insurance_ev(shoe_counts)
+                print(f"\nInsurance EV: {insurance_ev:.5f}")
+                if insurance_ev > 0:
+                    print(f"{Fore.GREEN}Insurance bet is profitable{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.RED}Insurance bet is unprofitable{Style.RESET_ALL}")
+                
             
             player_input = input("Enter Player's cards (2 chars, e.g. 'T5', 'J9', '77') or 0 to reset: ").strip().upper()
             if player_input == '0':
