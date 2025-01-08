@@ -1,9 +1,16 @@
 import random
-from colorama import Fore, Style, init
 import time
 
-# Initialize colorama
-init()
+# If you use colorama for colors in a console
+try:
+    from colorama import Fore, Style, init
+    init()
+except ImportError:
+    # If colorama isn't installed, define dummy Fore/Style
+    class _DummyColors:
+        def __getattr__(self, name):
+            return ''
+    Fore = Style = _DummyColors()
 
 # Constants
 BLACKJACK = 21
@@ -37,13 +44,17 @@ RANK_TO_VALUE = {
 
 # Card Counting System
 COUNTING_SYSTEM = {
-    '2': 1.0, '7': 1.0, '3': 1.0, '6': 2.0, '4': 2.0, '5': 2.0,
+    '2': 1.0, '3': 1.0, '4': 2.0, '5': 2.0, '6': 2.0, '7': 1.0,
     '8': 0.0, '9': -1.0, 'T': -2.0, 'J': -2.0, 'Q': -2.0, 'K': -2.0, 'A': 0.0
 }
 
 # Global running count
 running_count = 0
 
+
+###############################################################################
+# HELPER FUNCTIONS
+###############################################################################
 def initialize_shoe_counts(num_decks):
     shoe_counts = {}
     for rank in ALL_RANKS:
@@ -86,8 +97,8 @@ def build_shoe_list(shoe_counts):
 
 def hand_value(cards):
     """
-    Returns the best total under/equals 21 if possible.
-    Aces are valued 11 or 1.
+    Returns the best total <= 21 if possible, else the first bust total.
+    Aces (11) may be downgraded to 1 if that helps.
     """
     total = sum(cards)
     aces = cards.count(11)
@@ -106,17 +117,16 @@ def is_soft_hand(cards):
     while total > BLACKJACK and aces > 0:
         total -= 10
         aces -= 1
-    # After adjusting for 'soft' aces, if any aces are left, it's soft.
+    # After adjusting for 'soft' aces, if any aces are left as 11, it's soft.
     return aces > 0
 
 def simulate_dealer_hand_once(dealer_card_val, shoe_list):
     """
     Simulate a single dealer hand starting with dealer_card_val,
-    drawing from a *local copy* of shoe_list (so each simulation
-    is independent). Returns the dealer's final total.
+    drawing from a local copy of shoe_list. Returns the dealer's final total.
     """
     local_shoe = shoe_list.copy()
-    # Remove the known dealer upcard from the local shoe once
+    # Remove the known dealer upcard from the local shoe
     if dealer_card_val in local_shoe:
         local_shoe.remove(dealer_card_val)
     dealer_cards = [dealer_card_val]
@@ -130,42 +140,6 @@ def simulate_dealer_hand_once(dealer_card_val, shoe_list):
         else:
             break
     return hand_value(dealer_cards)
-
-def play_out_hand(cards, local_shoe):
-    """
-    Keep hitting this player's hand according to your logic or standard strategy,
-    until they stand or bust.
-    """
-    # Example: keep hitting until total >= 17, or total is a soft 18, etc.
-    # In real code, you'd do something more refined than this
-    while True:
-        t = hand_value(cards)
-        if t >= 17:  # or use your custom logic
-            break
-        if not local_shoe:
-            break
-        new_card = random.choice(local_shoe)
-        local_shoe.remove(new_card)
-        cards.append(new_card)
-        if hand_value(cards) > 21:
-            break
-    return cards
-
-def compare_final_totals(player_total, dealer_total):
-    """
-    Return +1 if player wins, -1 if dealer wins, 0 if push.
-    """
-    if player_total > 21:
-        return -1
-    elif dealer_total > 21:
-        return +1
-    elif player_total > dealer_total:
-        return +1
-    elif player_total < dealer_total:
-        return -1
-    else:
-        return 0
-
 
 def simulate_dealer_hands(dealer_card_val, shoe_counts, num_simulations):
     """
@@ -181,10 +155,11 @@ def simulate_dealer_hands(dealer_card_val, shoe_counts, num_simulations):
 
 def process_results_for_stand_like(player_t, dealer_totals_list, is_soft):
     """
-    Utility to compare a standing player's total vs. many dealer totals.
-    Returns the sum of +1 win / -1 loss for the entire list.
+    Compare a standing player's total vs. many dealer totals.
+    Returns the sum of +1 (win) / -1 (loss) / 0 (push).
     """
     if player_t > BLACKJACK:
+        # If player is bust, all are lost
         return -1 * len(dealer_totals_list)
     
     chunk_ev = 0
@@ -192,12 +167,13 @@ def process_results_for_stand_like(player_t, dealer_totals_list, is_soft):
         if d_total > BLACKJACK:
             chunk_ev += 1
         else:
-            # Soft hand: check whether using Ace as 1 or 11 is better
             if is_soft:
+                # If it's a soft hand, consider the best Ace usage
                 soft_total = player_t + 10 if player_t <= 11 else player_t
-                if max(soft_total, player_t) > d_total:
+                best_player_total = max(soft_total, player_t)
+                if best_player_total > d_total:
                     chunk_ev += 1
-                elif max(soft_total, player_t) < d_total:
+                elif best_player_total < d_total:
                     chunk_ev -= 1
             else:
                 if player_t > d_total:
@@ -206,15 +182,84 @@ def process_results_for_stand_like(player_t, dealer_totals_list, is_soft):
                     chunk_ev -= 1
     return chunk_ev
 
+def calculate_insurance_ev(shoe_counts):
+    """
+    Roughly: Insurance pays 2:1 if dealer has blackjack (hidden 10-value).
+    The bet costs 1 for every 2 gain in success.
+    EV = P(BJ)*2 - (1 - P(BJ))*1
+    """
+    total_cards = sum(shoe_counts.values())
+    ten_value_cards = shoe_counts['T'] + shoe_counts['J'] + shoe_counts['Q'] + shoe_counts['K']
+    if total_cards == 0:
+        return 0
+    prob_dealer_blackjack = ten_value_cards / total_cards
+    insurance_ev = (prob_dealer_blackjack * 2) - (1 - prob_dealer_blackjack)
+    return insurance_ev
+
+def print_dealer_probabilities(shoe_counts, dealer_up):
+    """
+    Example usage if you want to show whether insurance is profitable.
+    """
+    if dealer_up == 'A':
+        insurance_ev = calculate_insurance_ev(shoe_counts)
+        if insurance_ev < 0:
+            print("Insurance bet is unprofitable")
+        else:
+            print("Insurance bet is profitable")
+
+
+###############################################################################
+# NEW HELPER FOR PLAYING OUT A HAND (for Hit or after Split)
+###############################################################################
+def play_out_hand(player_hand, local_deck, allow_double=True):
+    """
+    A simple placeholder: 
+      1) If we have exactly 2 cards and total <= 11, let's double. 
+         Otherwise, 
+      2) Keep hitting until total >= 17 or bust/empty deck.
+    Returns the final hand, plus the bet_multiplier (1 or 2).
+    """
+    bet_multiplier = 1
+
+    # Check if exactly 2 cards => possible double
+    if allow_double and len(player_hand) == 2:
+        current_total = hand_value(player_hand)
+        # Simple logic: if total <= 11, let's double down
+        if current_total <= 11 and len(local_deck) > 0:
+            bet_multiplier = 2
+            # Draw exactly one card
+            draw_card = random.choice(local_deck)
+            local_deck.remove(draw_card)
+            player_hand.append(draw_card)
+            return player_hand, bet_multiplier
+        # else we do the normal "hit until 17" logic
+
+    # If we didn't double, or doubling wasn't allowed, we keep hitting
+    while True:
+        total_now = hand_value(player_hand)
+        if total_now >= 17:
+            break
+        if not local_deck:
+            break
+        new_card_val = random.choice(local_deck)
+        local_deck.remove(new_card_val)
+        player_hand.append(new_card_val)
+        if hand_value(player_hand) > BLACKJACK:
+            break
+    return player_hand, bet_multiplier
+
+
+###############################################################################
+# MONTE CARLO EV FUNCTION (UPDATED)
+###############################################################################
 def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulations=SIMULATIONS):
     """
     Main Monte Carlo function that calculates EV for one action:
     'Stand', 'Hit', 'Double Down', or 'Split'.
 
-    Each simulation should sample from the shoe independently.
+    Each simulation uses a fresh local shoe. 
     The final EV is scaled by RTP.
     """
-    import time
     start_time = time.time()
     player_total = hand_value(player_cards)
     is_soft_player = is_soft_hand(player_cards)
@@ -224,70 +269,46 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
     # We break simulations into 10 chunks to measure convergence
     chunk_size = simulations // 10
 
-    # Helper function for fully playing out a "Hit" hand:
-    def play_out_hand(p_cards, local_deck):
-        """
-        Keep drawing until total >= 17 (or bust) -- a simple placeholder logic.
-        You can replace with any more detailed strategy (e.g. basic strategy).
-        """
-        while True:
-            total_now = hand_value(p_cards)
-            if total_now >= 17:      # Stop hitting at 17+
-                break
-            if not local_deck:      # No cards left to draw
-                break
-            # Draw one card
-            new_card_val = random.choice(local_deck)
-            local_deck.remove(new_card_val)
-            p_cards.append(new_card_val)
-            # Stop if bust
-            if hand_value(p_cards) > 21:
-                break
-        return p_cards
-
-    ############################################################################
+    # -------------------------------------------------------------------------
     # STAND
-    ############################################################################
+    # -------------------------------------------------------------------------
     if action == "Stand":
-        # 10 chunks to measure EV over time
         for i in range(10):
             dealer_totals = simulate_dealer_hands(dealer_card_val, shoe_counts, chunk_size)
             ev_chunk = process_results_for_stand_like(player_total, dealer_totals, is_soft_player)
             ev += ev_chunk
             checkpoint_means.append(ev / ((i + 1) * chunk_size))
 
-    ############################################################################
-    # HIT
-    ############################################################################
+    # -------------------------------------------------------------------------
+    # HIT (with full "play_out_hand" logic)
+    # -------------------------------------------------------------------------
     elif action == "Hit":
         for i in range(10):
             ev_chunk = 0
             for _ in range(chunk_size):
-                # Copy shoe and remove known cards
                 local_shoe = build_shoe_list(shoe_counts)
 
-                # Remove the existing player cards
+                # Remove player's known cards
                 tmp_cards = []
                 for val in player_cards:
                     if val in local_shoe:
                         local_shoe.remove(val)
                     tmp_cards.append(val)
 
-                # Remove the dealer upcard
+                # Remove dealer's upcard
                 if dealer_card_val in local_shoe:
                     local_shoe.remove(dealer_card_val)
 
-                # Now fully play out the player's hand
-                tmp_cards = play_out_hand(tmp_cards, local_shoe)
-
-                # Evaluate player's final total
+                # Play out the player's hand (allow_double=False if you want)
+                tmp_cards, bet_factor = play_out_hand(tmp_cards, local_shoe, allow_double=False)
                 p_total = hand_value(tmp_cards)
 
                 # Dealer finishes
                 d_total = simulate_dealer_hand_once(dealer_card_val, local_shoe)
 
-                # Compare results
+                # Compare
                 if p_total > BLACKJACK:
+                    # lose 1
                     ev_chunk -= 1
                 else:
                     if d_total > BLACKJACK or p_total > d_total:
@@ -298,9 +319,9 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
             ev += ev_chunk
             checkpoint_means.append(ev / ((i + 1) * chunk_size))
 
-    ############################################################################
-    # DOUBLE DOWN
-    ############################################################################
+    # -------------------------------------------------------------------------
+    # DOUBLE DOWN (only one extra card, no further hitting)
+    # -------------------------------------------------------------------------
     elif action == "Double Down":
         for i in range(10):
             ev_chunk = 0
@@ -329,7 +350,7 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
                 # Dealer final
                 d_total = simulate_dealer_hand_once(dealer_card_val, local_shoe)
 
-                # Compare (double down => +/- 2)
+                # Compare (double => +/- 2)
                 if p_total > BLACKJACK:
                     ev_chunk -= 2
                 else:
@@ -341,86 +362,118 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
             ev += ev_chunk
             checkpoint_means.append(ev / ((i + 1) * chunk_size))
 
-    ############################################################################
-    # SPLIT
-    ############################################################################
+    # -------------------------------------------------------------------------
+    # SPLIT (DAS allowed)
+    # -------------------------------------------------------------------------
     elif action == "Split":
+        # The player's hand has exactly 2 cards of the same rank
         split_card_val = player_cards[0]
         split_ev_accumulator = 0
 
-        # We'll do N simulations and sum up the result of both sub-hands each time
-        # (since each split is effectively two independent 1-unit bets).
+        # We have 2 sub-hands (since it's a split)
+        # We'll simulate each sub-hand in each chunk
         for i in range(10):
             ev_chunk = 0
             for _ in range(chunk_size):
                 local_shoe = build_shoe_list(shoe_counts)
                 
-                # Remove both original cards
-                if local_shoe.count(split_card_val) >= 2:
+                # Remove both copies of the split card from the shoe (because the player has them)
+                # If you only remove one for each sub-hand, do it inside sub-hand loop.
+                # But it's simpler to remove them up-front since the player is holding both.
+                card_count = local_shoe.count(split_card_val)
+                if card_count >= 2:
                     local_shoe.remove(split_card_val)
                     local_shoe.remove(split_card_val)
                 else:
-                    continue  # or handle error
+                    # Not enough cards, skip this iteration
+                    continue
 
                 # Remove dealer upcard
                 if dealer_card_val in local_shoe:
                     local_shoe.remove(dealer_card_val)
 
-                # ----- SUB-HAND 1 -----
+                # --------- SUB-HAND #1 -----------
                 sub_hand_1 = [split_card_val]
-                new_card_1 = random.choice(local_shoe)
-                local_shoe.remove(new_card_1)
-                sub_hand_1.append(new_card_1)
+                # Draw one immediate card to form the new 2-card hand
+                if local_shoe:
+                    draw_val = random.choice(local_shoe)
+                    local_shoe.remove(draw_val)
+                    sub_hand_1.append(draw_val)
 
-                # keep hitting sub_hand_1 if needed (depending on your strategy)
-                sub_hand_1 = play_out_hand(sub_hand_1, local_shoe)  
+                # Now fully play out sub-hand #1 (DAS logic => allow_double=True)
+                sub_hand_1, bet_mult_1 = play_out_hand(sub_hand_1, local_shoe, allow_double=True)
                 p_total_1 = hand_value(sub_hand_1)
 
-                # dealer’s final for sub-hand #1
-                dealer_final_1 = simulate_dealer_hand_once(dealer_card_val, local_shoe.copy())
+                # Dealer finishes
+                d_total_1 = simulate_dealer_hand_once(dealer_card_val, local_shoe.copy())
 
-                # Evaluate sub-hand #1
-                result_1 = compare_final_totals(p_total_1, dealer_final_1)
-
-                # ----- SUB-HAND 2 -----
-                # We start again with the same split_card_val
+                # Resolve sub-hand #1
+                if p_total_1 > BLACKJACK:
+                    ev_sub_1 = -1 * bet_mult_1
+                else:
+                    if d_total_1 > BLACKJACK or p_total_1 > d_total_1:
+                        ev_sub_1 = +1 * bet_mult_1
+                    elif p_total_1 < d_total_1:
+                        ev_sub_1 = -1 * bet_mult_1
+                    else:
+                        ev_sub_1 = 0
+                        
+                # --------- SUB-HAND #2 -----------
+                # The second sub-hand also starts with the same split card
                 sub_hand_2 = [split_card_val]
-                new_card_2 = random.choice(local_shoe)
-                local_shoe.remove(new_card_2)
-                sub_hand_2.append(new_card_2)
+                if local_shoe:
+                    draw_val_2 = random.choice(local_shoe)
+                    local_shoe.remove(draw_val_2)
+                    sub_hand_2.append(draw_val_2)
 
-                # keep hitting sub_hand_2
-                sub_hand_2 = play_out_hand(sub_hand_2, local_shoe)
+                sub_hand_2, bet_mult_2 = play_out_hand(sub_hand_2, local_shoe, allow_double=True)
                 p_total_2 = hand_value(sub_hand_2)
 
-                dealer_final_2 = simulate_dealer_hand_once(dealer_card_val, local_shoe.copy())
-                result_2 = compare_final_totals(p_total_2, dealer_final_2)
+                # Dealer again (fresh copy, but up to you if you share draws)
+                d_total_2 = simulate_dealer_hand_once(dealer_card_val, local_shoe.copy())
 
-                # Each sub-hand is +1 / -1 / 0 (push).
-                # Summation of both sub-hands
-                ev_chunk += (result_1 + result_2)
+                # Resolve sub-hand #2
+                if p_total_2 > BLACKJACK:
+                    ev_sub_2 = -1 * bet_mult_2
+                else:
+                    if d_total_2 > BLACKJACK or p_total_2 > d_total_2:
+                        ev_sub_2 = +1 * bet_mult_2
+                    elif p_total_2 < d_total_2:
+                        ev_sub_2 = -1 * bet_mult_2
+                    else:
+                        ev_sub_2 = 0
+
+                # Combine the results from both sub-hands
+                ev_chunk += (ev_sub_1 + ev_sub_2)
 
             split_ev_accumulator += ev_chunk
 
-        ev = split_ev_accumulator / (10 * chunk_size)
+        ev = split_ev_accumulator
 
-
-    # Scale final EV by RTP
+    # -------------------------------------------------------------------------
+    # FINAL EV SCALING
+    # -------------------------------------------------------------------------
     elapsed_time = time.time() - start_time
     final_ev = (ev / simulations) * RTP
 
+    # Print intermediate info
     print(f"\nAction: {action}, Player Total: {player_total}, Dealer Card: {dealer_card_val}")
     print(f"Final EV for {action}: {final_ev:.5f}, Time: {elapsed_time:.2f}s")
 
     if checkpoint_means:
-        benchmarks = " | ".join([f"{(i + 1) * 10}%: {val:.5f}"
-                                 for i, val in enumerate(checkpoint_means)])
+        benchmarks = " | ".join(
+            [f"{(i + 1) * 10}%: {val:.5f}" for i, val in enumerate(checkpoint_means)]
+        )
         print(f"Convergence: [{benchmarks}]")
     else:
         print("No convergence benchmarks available for this action.")
 
     return final_ev, elapsed_time, checkpoint_means
 
+
+###############################################################################
+# GET PLAYER ACTION (REMOVED 'not is_split_hand' TO ALLOW DAS)
+###############################################################################
 def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=True, is_split_hand=False):
     """
     Evaluate the EV of each possible action and pick the best one.
@@ -428,17 +481,14 @@ def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=
 
     actions = ["Stand", "Hit"]
 
-    # Only allow Double Down if:
-    #   1) It is the player's first turn of the hand
-    #   2) They have exactly 2 cards
-    #   3) It is not a split hand (if you want to forbid double after split)
-    ### CHANGED LINES BELOW ###
-    if is_first_turn and len(player_cards) == 2 and not is_split_hand:
+    # Double Down is now allowed if:
+    # 1) It is the player's first turn
+    # 2) They have exactly 2 cards
+    # (We removed 'not is_split_hand' so it's effectively DAS)
+    if is_first_turn and len(player_cards) == 2:
         actions.append("Double Down")
-    ### CHANGED LINES ABOVE ###
 
     # Only append "Split" if exactly 2 cards and same rank
-    # (still requires it to be the first turn in standard Blackjack)
     if is_first_turn and len(player_cards) == 2 and player_cards[0] == player_cards[1]:
         actions.append("Split")
         
@@ -447,8 +497,8 @@ def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=
     
     # Calculate EV for each possible action in 'actions'
     for action in actions:
-        ev, elapsed_time, _ = monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action)
-        evs[action] = ev
+        ev_val, elapsed_time, _ = monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action)
+        evs[action] = ev_val
         times[action] = elapsed_time
         
     sorted_actions = sorted(evs.items(), key=lambda x: x[1], reverse=True)
@@ -478,31 +528,9 @@ def get_player_action(player_cards, dealer_card_val, shoe_counts, is_first_turn=
     return best_action
 
 
-def calculate_insurance_ev(shoe_counts):
-    """
-    Roughly: Insurance pays 2:1 if dealer has blackjack (hidden 10-value).
-    The bet costs 1 for every 2 gain in success.
-    EV = P(BJ)*2 - (1 - P(BJ))*1
-    """
-    total_cards = sum(shoe_counts.values())
-    ten_value_cards = shoe_counts['T'] + shoe_counts['J'] + shoe_counts['Q'] + shoe_counts['K']
-    if total_cards == 0:
-        return 0
-    prob_dealer_blackjack = ten_value_cards / total_cards
-    insurance_ev = (prob_dealer_blackjack * 2) - (1 - prob_dealer_blackjack)
-    return insurance_ev
-
-def print_dealer_probabilities(shoe_counts, dealer_up):
-    """
-    Example usage if you want to show whether insurance is profitable.
-    """
-    if dealer_up == 'A':
-        insurance_ev = calculate_insurance_ev(shoe_counts)
-        if insurance_ev < 0:
-            print("Insurance bet is unprofitable")
-        else:
-            print("Insurance bet is profitable")
-
+###############################################################################
+# MAIN
+###############################################################################
 def main():
     global running_count
     print("Blackjack Optimal Strategy Solver (No NumPy) with a Persistent Shoe State\n")
@@ -539,7 +567,7 @@ def main():
             remove_card_from_shoe(shoe_counts, dealer_card_input)
             dealer_card_val = RANK_TO_VALUE[dealer_card_input]
             
-            # Insurance check if upcard is Ace
+            # Check insurance if dealer upcard is Ace
             if dealer_card_input == 'A':
                 insurance_ev = calculate_insurance_ev(shoe_counts)
                 if insurance_ev > 0:
@@ -588,7 +616,7 @@ def main():
                     dealer_card_val,
                     shoe_counts,
                     is_first_turn=first_turn,
-                    is_split_hand=is_split_hand  # Let the get_player_action check if it's split
+                    is_split_hand=is_split_hand
                 )
                 
                 # After the first decision, no more double-down is offered
@@ -608,10 +636,11 @@ def main():
                         break
 
                 elif best_action == "Split":
-                    # If you want to forbid double after a split, keep is_split_hand=True
-                    # If you allow double after a split (DAS), set is_split_hand=False
+                    # If you allow double after a split, keep is_split_hand=True
                     is_split_hand = True
-                    # Handle your split logic here; for now, we just break:
+                    # For demonstration, we won't fully resolve the real-time dealing
+                    # of sub-hands here. The simulation from monte_carlo_ev() has already
+                    # told us the best strategy. We'll just break the loop.
                     break
 
                 else:
