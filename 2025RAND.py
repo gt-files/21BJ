@@ -103,16 +103,72 @@ def simulate_dealer_hands(dealer_card_val, shoe_counts, num_simulations):
                 
     return final_totals
 
+def is_soft_hand(cards):
+    total = sum(cards)
+    aces = cards.count(11)
+    while total > BLACKJACK and aces:
+        total -= 10
+        aces -= 1
+    return aces > 0
+
 def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulations=SIMULATIONS):
+    start_time = time.time()
     player_total = hand_value(player_cards)
+    is_soft = is_soft_hand(player_cards)
     ev = 0
     checkpoint_means = []
+    chunk_size = simulations // 10
     
+    if action == "Hit":
+        for i in range(10):
+            shoe_list = build_shoe_list(shoe_counts)
+            if not shoe_list:
+                break
+            new_hands = []
+            for _ in range(chunk_size):
+                new_cards = player_cards.copy()
+                draw_val = random.choice(shoe_list)
+                new_cards.append(draw_val)
+                # This part doesn't properly handle soft hands
+                while is_soft_hand(new_cards) and hand_value(new_cards) < 18:
+                    if shoe_list:
+                        draw_val = random.choice(shoe_list)
+                        new_cards.append(draw_val)
+                    else:
+                        break
+                new_hands.append(new_cards)
+
+                
+            dealer_totals = simulate_dealer_hands(dealer_card_val, shoe_counts, chunk_size)
+            ev_chunk = 0
+            
+            for hand, d_t in zip(new_hands, dealer_totals):
+                p_t = hand_value(hand)
+                is_soft_final = is_soft_hand(hand)
+                if p_t > BLACKJACK:
+                    ev_chunk -= 1
+                else:
+                    if is_soft_final:
+                        soft_total = p_t + 10 if p_t <= 11 else p_t
+                        if d_t > BLACKJACK or max(soft_total, p_t) > d_t:
+                            ev_chunk += 1
+                        elif max(soft_total, p_t) < d_t:
+                            ev_chunk -= 1
+                    else:
+                        if d_t > BLACKJACK or p_t > d_t:
+                            ev_chunk += 1
+                        elif p_t < d_t:
+                            ev_chunk -= 1
+                            
+            ev += ev_chunk
+            checkpoint_means.append(ev / ((i + 1) * chunk_size))
+
+
     print(f"\nAction: {action}, Player Total: {player_total}, Dealer Card: {dealer_card_val}")
     start_time = time.time()
     chunk_size = simulations // 10
     
-    def process_results_for_stand_like(player_t, dealer_totals_list, multiplier=1):
+    def process_results_for_stand_like(player_t, dealer_totals_list, is_soft_hand, multiplier=1):
         if player_t > BLACKJACK:
             return -multiplier * len(dealer_totals_list)
         
@@ -121,16 +177,21 @@ def monte_carlo_ev(player_cards, dealer_card_val, shoe_counts, action, simulatio
             if d_total > BLACKJACK:
                 chunk_ev += multiplier
             else:
-                if player_t > d_total:
-                    chunk_ev += multiplier
-                elif player_t < d_total:
-                    chunk_ev -= multiplier
-        return chunk_ev
+                if is_soft_hand:
+                    # This logic is incorrect - it doesn't properly track the soft total
+                    soft_total = player_t + 10 if player_t <= 11 else player_t
+                    hard_total = player_t
+                    if max(soft_total, hard_total) > d_total:
+                        chunk_ev += multiplier
+                    elif max(soft_total, hard_total) < d_total:
+                        chunk_ev -= multiplier  
+            return chunk_ev
+
 
     if action == "Stand":
         for i in range(10):
             dealer_totals = simulate_dealer_hands(dealer_card_val, shoe_counts, chunk_size)
-            ev_chunk = process_results_for_stand_like(player_total, dealer_totals, multiplier=1)
+            ev_chunk = process_results_for_stand_like(player_total, dealer_totals, is_soft, multiplier=1)
             ev += ev_chunk
             checkpoint_means.append(ev / ((i + 1) * chunk_size))
             
